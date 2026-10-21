@@ -48,7 +48,7 @@ jobs:
 
       - name: Update Kubeconfig for EKS
         run: |
-          aws eks update-kubeconfig --region us-east-1 --name your-eks-cluster-name
+          aws eks update-kubeconfig --region us-east-1 --name voting-app-cluster
 
       - name: Deploy Robot Shop Application via Helm
         run: |
