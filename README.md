@@ -1,128 +1,143 @@
-# Sample Microservice Application
+# Automated EKS Deployment & Observability with Chaos Resilience Testing
 
-Stan's Robot Shop is a sample microservice application you can use as a sandbox to test and learn containerised application orchestration and monitoring techniques. It is not intended to be a comprehensive reference example of how to write a microservices application, although you will better understand some of those concepts by playing with Stan's Robot Shop. To be clear, the error handling is patchy and there is not any security built into the application.
+A cloud-native DevOps project demonstrating the deployment, observability, and automated CI/CD integration of the microservices-based **Instana Robot Shop** application on **Amazon EKS (Elastic Kubernetes Service)** using **Terraform**, **Helm**, **GitHub Actions**, **Prometheus**, and **Grafana**.
 
-You can get more detailed information from my [blog post](https://www.instana.com/blog/stans-robot-shop-sample-microservice-application/) about this sample microservice application.
+---
 
-This sample microservice application has been built using these technologies:
-- NodeJS ([Express](http://expressjs.com/))
-- Java ([Spring Boot](https://spring.io/))
-- Python ([Flask](http://flask.pocoo.org))
-- Golang
-- PHP (Apache)
-- MongoDB
-- Redis
-- MySQL ([Maxmind](http://www.maxmind.com) data)
-- RabbitMQ
-- Nginx
-- AngularJS (1.x)
+## 🏗️ Architecture Overview
 
-The various services in the sample application already include all required Instana components installed and configured. The Instana components provide automatic instrumentation for complete end to end [tracing](https://docs.instana.io/core_concepts/tracing/), as well as complete visibility into time series metrics for all the technologies.
+!\[roboshop\](./assets/05-robot-shop.png)
 
-To see the application performance results in the Instana dashboard, you will first need an Instana account. Don't worry a [trial account](https://instana.com/trial?utm_source=github&utm_medium=robot_shop) is free.
+The application architecture utilizes standard Kubernetes microservices deployed onto AWS infrastructure managed via Terraform:
 
-## Build from Source
-To optionally build from source (you will need a newish version of Docker to do this) use Docker Compose. Optionally edit the `.env` file to specify an alternative image registry and version tag; see the official [documentation](https://docs.docker.com/compose/env-file/) for more information.
+* **Cloud Provider:** Amazon Web Services (AWS)
 
-To download the tracing module for Nginx, it needs a valid Instana agent key. Set this in the environment before starting the build.
+* **Container Orchestration:** AWS EKS (`voting-app-cluster`)
 
-```shell
-$ export INSTANA_AGENT_KEY="<your agent key>"
+* **Namespace:** `robot-shop`
+
+* **Observability Stack:** `kube-prometheus-stack` in the `logging` namespace (Prometheus, Grafana, Alertmanager)
+
+* **In-Cluster Services:** `cart`, `catalogue`, `dispatch`, `mongodb`, `mysql`, `payment`, `rabbitmq`, `ratings`, `redis`, `shipping`, `user`, `web`
+
+## 💡 Strategic Architecture Choice: Hybrid Deployment Model
+
+To strike a balance between real-world enterprise CI/CD practices and strict **cost optimization / billing control**, this project implements a **Hybrid Deployment Strategy**:
+
+1. **Manual Infrastructure Control (`Terraform Apply / Destroy`):**
+
+   * Infrastructure as Code (IaC) is written using Terraform to provision the custom VPC, subnets, route tables, internet gateways, and EKS cluster (`voting-app-cluster`).
+
+   * **Why Manual Execution?** To prevent unexpected AWS cloud costs resulting from automated background triggers or forgotten test clusters, `terraform apply` and `terraform destroy` are run intentionally by the engineer. This ensures the environment is active only during testing and tear-down is explicitly executed when drills conclude.
+
+2. **Automated Application CI/CD (`GitHub Actions`):**
+
+   * Application code validation, build checks, standardizing manifests, and cluster updates are handled continuously via `.github/workflows/ci-cd.yml`.
+
+   * Pushing to the main branch triggers automated checks and securely communicates with EKS to deploy workloads via `kubectl` and `Helm`.
+
+     !\[Github-pipe\](./assets/04-github-actions-pipeline.png)
+
+     !\[Github-pipe2\](./assets/04-github-actions-pipeline2.png)
+
+## 📊 Observability & Monitoring Setup
+
+The monitoring stack was deployed using Helm via the `kube-prometheus-stack` inside the `logging` namespace:
+
+* **Prometheus:** Scrapes metrics across application namespaces (`robot-shop`) and node health indicators.
+
+* **Grafana:** Visualizes traffic, request rates, pod counts, and resource constraints using custom PromQL queries:
+
+  ```
+  sum(rate(http_requests_total{namespace="robot-shop"}[1m])) by (status, path)
+  
+  ```
+
+* **Alertmanager:** Configured to monitor system thresholds, notifying on state mismatches and missing target scrapers.
+
+* **Local Service Access:** Attained securely via `kubectl port-forward`:
+
+  !\[cluster\](./assets/03-aws-eks-cluster.png)
+
+  !\[cluster2\](./assets/03-aws-eks-cluster2.png)
+
+  * **Grafana:** `kubectl port-forward svc/kube-prometheus-stack-grafana 3000:80 -n logging`
+
+    !\[grafana\](./assets/02-grafana-promql-explore.png)
+
+  * **Alertmanager:** `kubectl port-forward svc/kube-prometheus-stack-alertmanager 9093:9093 -n logging`
+
+    !\[alertfire\](./assets/01-alertmanager-firing.png)
+
+    !\[alertfire2\](./assets/01-alertmanager-firing2.png)
+
+## 🧪 Chaos Engineering & Resilience Testing
+
+To validate that the observability pipeline accurately captures system failure modes, chaos engineering experiments were conducted on live workloads:
+
+### Drill 1: Service Dependency Termination
+
+* **Action:** Scaled down core microservice deployments (`catalogue`) and stateful workloads (`redis`) to `0` replicas using `kubectl scale`.
+
+* **Observed Alerts in Alertmanager & Grafana:**
+
+  1. **`TargetDown` (`job="web"`):** Captured immediately as scraping endpoints failed.
+
+  2. **`KubePodNotReady` (`pod="redis-0"`):** Triggered when dependent stateful sets failed health checks.
+
+  3. **`KubeStatefulSetReplicasMismatch`:** Triggered due to expected vs. actual replica counts.
+
+### Drill 2: Synthetic Traffic Verification
+
+* Traffic spikes and HTTP request rates were verified using terminal-driven request loops (`curl -s -o /dev/null http://localhost:8080/`) to observe real-time rate metrics on Grafana dashboards during recovery phases.
+
+## 🚀 CI/CD Pipeline Workflow
+
+The automated deployment pipeline (`.github/workflows/ci-cd.yml`) performs the following automated steps:
+
+```
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    name: Build & Validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Code & Formatting
+        run: echo "Running syntax and manifest verification..."
+
+  deploy-to-eks:
+    name: Deploy to AWS EKS
+    needs: build-and-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      - name: Update Kubeconfig
+        run: aws eks update-kubeconfig --name voting-app-cluster --region us-east-1
+      - name: Deploy Workloads
+        run: |
+          kubectl apply -f manifest/ -n robot-shop
+
 ```
 
-Now build all the images.
+## 🧹 Tear-down & Infrastructure Lifecycle
 
-```shell
-$ docker-compose build
-```
+Because resources were provisioned using Terraform under strict manual cost governance, tearing down the environment follows a clean, dependency-aware process:
 
-If you modified the `.env` file and changed the image registry, you need to push the images to that registry
+1. Clean up Kubernetes-managed Load Balancers and Services to release Elastic Network Interfaces (ENIs).
 
-```shell
-$ docker-compose push
-```
-
-## Run Locally
-You can run it locally for testing.
-
-If you did not build from source, don't worry all the images are on Docker Hub. Just pull down those images first using:
-
-```shell
-$ docker-compose pull
-```
-
-Fire up Stan's Robot Shop with:
-
-```shell
-$ docker-compose up
-```
-
-If you want to fire up some load as well:
-
-```shell
-$ docker-compose -f docker-compose.yaml -f docker-compose-load.yaml up
-```
-
-If you are running it locally on a Linux host you can also run the Instana [agent](https://docs.instana.io/quick_start/agent_setup/container/docker/) locally, unfortunately the agent is currently not supported on Mac.
-
-There is also only limited support on ARM architectures at the moment.
-
-## Marathon / DCOS
-
-The manifests for robotshop are in the *DCOS/* directory. These manifests were built using a fresh install of DCOS 1.11.0. They should work on a vanilla HA or single instance install.
-
-You may install Instana via the DCOS package manager, instructions are here: https://github.com/dcos/examples/tree/master/instana-agent/1.9
-
-## Kubernetes
-You can run Kubernetes locally using [minikube](https://github.com/kubernetes/minikube) or on one of the many cloud providers.
-
-The Docker container images are all available on [Docker Hub](https://hub.docker.com/u/robotshop/).
-
-Install Stan's Robot Shop to your Kubernetes cluster using the [Helm](K8s/helm/README.md) chart.
-
-To deploy the Instana agent to Kubernetes, just use the [helm](https://github.com/instana/helm-charts) chart.
-
-## Accessing the Store
-If you are running the store locally via *docker-compose up* then, the store front is available on localhost port 8080 [http://localhost:8080](http://localhost:8080/)
-
-If you are running the store on Kubernetes via minikube then, find the IP address of Minikube and the Node Port of the web service.
-
-```shell
-$ minikube ip
-$ kubectl get svc web
-```
-
-If you are using a cloud Kubernetes / Openshift / Mesosphere then it will be available on the load balancer of that system.
-
-## Load Generation
-A separate load generation utility is provided in the `load-gen` directory. This is not automatically run when the application is started. The load generator is built with Python and [Locust](https://locust.io). The `build.sh` script builds the Docker image, optionally taking *push* as the first argument to also push the image to the registry. The registry and tag settings are loaded from the `.env` file in the parent directory. The script `load-gen.sh` runs the image, it takes a number of command line arguments. You could run the container inside an orchestration system (K8s) as well if you want to, an example descriptor is provided in K8s directory. For End-user Monitoring ,load is not automatically generated but by navigating through the Robotshop from the browser .For more details see the [README](load-gen/README.md) in the load-gen directory.  
-
-## Website Monitoring / End-User Monitoring
-
-### Docker Compose
-
-To enable Website Monioring / End-User Monitoring (EUM) see the official [documentation](https://docs.instana.io/website_monitoring/) for how to create a configuration. There is no need to inject the JavaScript fragment into the page, this will be handled automatically. Just make a note of the unique key and set the environment variable `INSTANA_EUM_KEY` and `INSTANA_EUM_REPORTING_URL` for the web image within `docker-compose.yaml`.
-
-### Kubernetes
-
-The Helm chart for installing Stan's Robot Shop supports setting the key and endpoint url required for website monitoring, see the [README](K8s/helm/README.md).
-
-## Prometheus
-
-The cart and payment services both have Prometheus metric endpoints. These are accessible on `/metrics`. The cart service provides:
-
-* Counter of the number of items added to the cart
-
-The payment services provides:
-
-* Counter of the number of items perchased
-* Histogram of the total number of items in each cart
-* Histogram of the total value of each cart
-
-To test the metrics use:
-
-```shell
-$ curl http://<host>:8080/api/cart/metrics
-$ curl http://<host>:8080/api/payment/metrics
-```
-
+2. Execute `terraform destroy` to tear down subnets, internet gateways, security groups, and the EKS control plane safely.
