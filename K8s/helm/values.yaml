@@ -9,8 +9,8 @@ image:
 # Provide your key and set the endpoint
 eum:
   key: null
-  url: https://eum-eu-west-1.instana.io
-  #url: https://eum-us-west-2.instana.io
+  url: null
+  #the url i took out, didn't want it sending telemetry to instana agent: https://eum-us-west-2.instana.io
 
 # Pod Security Policy
 psp:

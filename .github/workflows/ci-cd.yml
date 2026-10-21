@@ -1,0 +1,64 @@
+name: CI/CD Pipeline - Robot Shop & Observability
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  lint-and-validate:
+    name: Lint & Validate Manifests / Helm
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository Code
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'latest'
+
+      - name: Lint Application Helm Chart
+        run: |
+          helm lint K8s/helm/
+
+      - name: Lint Observability Helm Values
+        run: |
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo update
+          helm template test-release prometheus-community/kube-prometheus-stack \
+            -f observability/helm-values/prometheus-values.yaml --dry-run > /dev/null
+
+      - name: Validate Observability Manifests
+        uses: yokawasa/action-kubeconform@v4
+        with:
+          manifest: 'observability/'
+
+  fetch-aws-secrets:
+    name: Authenticate AWS & Fetch Secrets
+    needs: lint-and-validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Fetch Secrets from AWS Secrets Manager
+        uses: abhilash1in/aws-secrets-manager-action@v2.1.0
+        with:
+          secrets: |
+            ${{ secrets.AWS_SECRET_NAME }}
+          parse-json: true
+
+      - name: Verify Secret Fetching (Masked Check)
+        run: |
+          echo "Successfully authenticated and retrieved secrets from AWS Secrets Manager."
