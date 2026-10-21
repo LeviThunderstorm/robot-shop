@@ -7,8 +7,8 @@ on:
     branches: [ "main" ]
 
 jobs:
-  lint-and-validate:
-    name: Lint & Validate Manifests / Helm
+  lint-and-deploy:
+    name: Lint, Validate & Deploy to EKS
     runs-on: ubuntu-latest
 
     steps:
@@ -33,3 +33,23 @@ jobs:
             --kube-version 1.28.0 \
             --dry-run > /dev/null
           echo "Helm charts and observability configurations validated successfully!"
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+
+      - name: Update Kubeconfig for EKS
+        run: |
+          aws eks update-kubeconfig --region us-east-1 --name your-eks-cluster-name
+
+      - name: Deploy Robot Shop Application via Helm
+        run: |
+          helm upgrade --install robot-shop K8s/helm/ --namespace robot-shop --create-namespace
